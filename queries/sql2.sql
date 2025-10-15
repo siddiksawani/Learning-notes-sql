@@ -10,65 +10,23 @@ recalculated_kpis AS (
     CAST(CLM.LVL3_ACCT_GID      AS STRING) AS LVL3_ACCT_GID,
     CAST(CLM.MBR_ACCT_ID        AS STRING) AS MBR_ACCT_ID,
     CAST(CLM.FILL_DT            AS STRING) AS FILL_DT,
-    CAST(CLM.FRMLY_NDC_EFF_DT   AS STRING) AS FRMLY_NDC_EFF_DT,
-    CAST(CLM.FRMLY_NDC_EXPRN_DT AS STRING) AS FRMLY_NDC_EXPRN_DT,
+    CAST(FRMLY.FRMLY_NDC_EFF_DT   AS STRING) AS FRMLY_NDC_EFF_DT,
+    CAST(FRMLY.FRMLY_NDC_EXPRN_DT AS STRING) AS FRMLY_NDC_EXPRN_DT,
     CAST(CLM.SRC_FRMLY_PDL_CD   AS STRING) AS SRC_FRMLY_PDL_CD,
     CAST(CLM.SRC_CD             AS STRING) AS SRC_CD,
 
     CLM.REC_HIST_GID                                AS REC_HIST_GID,
     SUBSTR(CLM.GPI_CD, 1, 10)                       AS recal_GPI_10_CD,
     CLM.SRC_TMZN_CD                                 AS recal_SRC_TMZN_CD
-  FROM `edp-ga-restrict-pbmstorage.edp_custrpt_pbmedh_cnf.T_PHMCY_CLM_DLY_FACT` CLM, win
-  WHERE SAFE_CAST(CLM.FILL_DT AS DATE) BETWEEN win.dt_start AND win.dt_end
+  FROM `edp-ga-restrict-pbmstorage.edp_custrpt_pbmedh_cnf.T_PHMCY_CLM_DLY_FACT` AS CLM
+  JOIN `edp-ga-restrict-pbmstorage.edp_custrpt_pbmedh_cnf.T_FRMLY_HIST`        AS FRMLY
+    ON CLM.DRUG_PRD_ID = FRMLY.DRUG_PRD_ID
+   AND SAFE_CAST(CLM.FILL_DT AS DATE)
+       BETWEEN FRMLY.FRMLY_NDC_EFF_DT AND FRMLY.FRMLY_NDC_EXPRN_DT
+  WHERE SAFE_CAST(CLM.FILL_DT AS DATE) BETWEEN (SELECT dt_start FROM win) AND (SELECT dt_end FROM win)
 ),
 
-comparison AS (
-  SELECT
-    t.LVL1_ACCT_GID,
-    t.LVL3_ACCT_GID,
-    t.MBR_ACCT_ID,
-    t.FILL_DT,
-    t.FRMLY_NDC_EFF_DT,
-    t.FRMLY_NDC_EXPRN_DT,
-    t.SRC_FRMLY_PDL_CD,
-    t.SRC_CD,
-
-    IF(CAST(t.GPI_10_CD     AS STRING) IS NOT DISTINCT FROM r.recal_GPI_10_CD, 1, 0) AS GPI_10_CD_match,
-    IF(CAST(t.REC_HIST_GID  AS STRING) IS NOT DISTINCT FROM CAST(r.REC_HIST_GID AS STRING), 1, 0) AS REC_HIST_GID_match
-  FROM (
-    SELECT
-      CAST(LVL1_ACCT_GID      AS STRING) AS LVL1_ACCT_GID,
-      CAST(LVL3_ACCT_GID      AS STRING) AS LVL3_ACCT_GID,
-      CAST(MBR_ACCT_ID        AS STRING) AS MBR_ACCT_ID,
-      CAST(FILL_DT            AS STRING) AS FILL_DT,
-      CAST(FRMLY_NDC_EFF_DT   AS STRING) AS FRMLY_NDC_EFF_DT,
-      CAST(FRMLY_NDC_EXPRN_DT AS STRING) AS FRMLY_NDC_EXPRN_DT,
-      CAST(SRC_FRMLY_PDL_CD   AS STRING) AS SRC_FRMLY_PDL_CD,
-      CAST(SRC_CD             AS STRING) AS SRC_CD,
-      REC_HIST_GID,
-      GPI_10_CD,
-      SRC_TMZN_CD
-    FROM `edp-ga-restrict-pbmstorage.edp_custrpt_pbmedh_sdl.T_NON_FRMLY_MEDD_QL`, win
-    WHERE SAFE_CAST(FILL_DT AS DATE) BETWEEN win.dt_start AND win.dt_end
-  ) t
-  JOIN recalculated_kpis r USING
-  (
-    LVL1_ACCT_GID, LVL3_ACCT_GID, MBR_ACCT_ID, FILL_DT,
-    FRMLY_NDC_EFF_DT, FRMLY_NDC_EXPRN_DT, SRC_FRMLY_PDL_CD, SRC_CD
-  )
-)
-
-SELECT
-  tgt.REC_HIST_GID        AS tgt_rec_hist_gid,
-  r.REC_HIST_GID          AS src_rec_hist_gid,
-  tgt.GPI_10_CD           AS tgt_gpi10,
-  r.recal_GPI_10_CD       AS src_gpi10,
-  clm.GPI_CD              AS src_gpi_full,
-  tgt.SRC_TMZN_CD,
-  r.recal_SRC_TMZN_CD,
-  tgt.*
-FROM comparison c
-JOIN (
+target_norm AS (
   SELECT
     CAST(LVL1_ACCT_GID      AS STRING) AS LVL1_ACCT_GID,
     CAST(LVL3_ACCT_GID      AS STRING) AS LVL3_ACCT_GID,
@@ -84,17 +42,44 @@ JOIN (
     *
   FROM `edp-ga-restrict-pbmstorage.edp_custrpt_pbmedh_sdl.T_NON_FRMLY_MEDD_QL`, win
   WHERE SAFE_CAST(FILL_DT AS DATE) BETWEEN win.dt_start AND win.dt_end
-) tgt USING
+),
+
+comparison AS (
+  SELECT
+    t.LVL1_ACCT_GID, t.LVL3_ACCT_GID, t.MBR_ACCT_ID, t.FILL_DT,
+    t.FRMLY_NDC_EFF_DT, t.FRMLY_NDC_EXPRN_DT, t.SRC_FRMLY_PDL_CD, t.SRC_CD,
+
+    IF(CAST(t.GPI_10_CD AS STRING) IS NOT DISTINCT FROM r.recal_GPI_10_CD, 1, 0) AS GPI_10_CD_match,
+    IF(CAST(t.REC_HIST_GID AS STRING) IS NOT DISTINCT FROM CAST(r.REC_HIST_GID AS STRING), 1, 0) AS REC_HIST_GID_match
+  FROM target_norm t
+  JOIN recalculated_kpis r USING
+  (
+    LVL1_ACCT_GID, LVL3_ACCT_GID, MBR_ACCT_ID, FILL_DT,
+    FRMLY_NDC_EFF_DT, FRMLY_NDC_EXPRN_DT, SRC_FRMLY_PDL_CD, SRC_CD
+  )
+)
+
+SELECT
+  tgt.REC_HIST_GID    AS tgt_rec_hist_gid,
+  r.REC_HIST_GID      AS src_rec_hist_gid,
+  tgt.GPI_10_CD       AS tgt_gpi10,
+  r.recal_GPI_10_CD   AS src_gpi10,
+  clm.GPI_CD          AS src_gpi_full,
+  tgt.SRC_TMZN_CD,
+  r.recal_SRC_TMZN_CD,
+  tgt.*
+FROM comparison c
+JOIN target_norm        AS tgt USING
 (
   LVL1_ACCT_GID, LVL3_ACCT_GID, MBR_ACCT_ID, FILL_DT,
   FRMLY_NDC_EFF_DT, FRMLY_NDC_EXPRN_DT, SRC_FRMLY_PDL_CD, SRC_CD
 )
-JOIN recalculated_kpis r USING
+JOIN recalculated_kpis  AS r   USING
 (
   LVL1_ACCT_GID, LVL3_ACCT_GID, MBR_ACCT_ID, FILL_DT,
   FRMLY_NDC_EFF_DT, FRMLY_NDC_EXPRN_DT, SRC_FRMLY_PDL_CD, SRC_CD
 )
-JOIN `edp-ga-restrict-pbmstorage.edp_custrpt_pbmedh_cnf.T_PHMCY_CLM_DLY_FACT` clm
+JOIN `edp-ga-restrict-pbmstorage.edp_custrpt_pbmedh_cnf.T_PHMCY_CLM_DLY_FACT` AS clm
   ON clm.REC_HIST_GID = r.REC_HIST_GID
 WHERE (c.GPI_10_CD_match = 0 OR c.REC_HIST_GID_match = 0)
 LIMIT 200;
